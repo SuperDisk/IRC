@@ -4,7 +4,7 @@ unit IRC;
 
 interface
 
-uses Sockets, Winsock2, SysUtils, Classes, gqueue;
+uses Sockets, Winsock2, SysUtils, Classes, gqueue, syncobjs;
 
 type
   TAddress = array[0..3] of byte;
@@ -15,8 +15,10 @@ type
     Content: String;
   end;
 
-	TDataReadThread = class(TThread)
-		protected
+  TMessageQueue = Specialize TQueue<TMessage>;
+
+  TDataReadThread = class(TThread)
+  protected
       procedure Execute; override;
 
     public
@@ -29,7 +31,7 @@ type
 	end;
 
   TIRCClient = class
-	  public
+		public
       _Server: TAddress;
       _Port: Integer;
       PassWord: String;
@@ -39,7 +41,7 @@ type
       inputLine: String;
       Sin, Sout: Text;
 			DRT: TDataReadThread;
-      MessageQueue: TStringQueue;
+      MessageQueue: TMessageQueue;
 
       constructor Create(Server: TAddress; Port: Integer);
       constructor Create(Server: TAddress);
@@ -52,7 +54,7 @@ type
       procedure Join(Channel: String);
       procedure Part(Channel: String);
       procedure SendMessage(Message: String; Channel: String);
-      function GetMessage: String;
+      function GetMessage: TMessage;
 
     private
       procedure Send(Message: String);
@@ -70,7 +72,7 @@ begin
   _Server := Server;
   _Port := Port;
 
-  MessageQueue := TStringQueue.Create;
+  MessageQueue := TMessageQueue.Create;
 end;
 
 constructor TIRCClient.Create(Server: TAddress);
@@ -94,21 +96,42 @@ end;
 
 procedure TIRCClient.Listen;
 var
+  CS: TCriticalSection;
   I: Integer;
 begin
-	while (not DRT.Datas.IsEmpty) do begin
+  CS := TCriticalSection.Create;
+  CS.Acquire;
+	  {if (not DRT.Datas.IsEmpty) then begin
+      ParseData(DRT.Datas.Front);
+      DRT.Datas.Pop;
+    end;}
+
+	{for I := 0 to DRT.Datas.Size-1 do begin
+    ParseData(Drt.Datas.Front);
+  	DRT.Datas.Pop;
+  end;}
+
+
+  while (not DRT.Datas.IsEmpty) do begin
     ParseData(DRT.Datas.Front);
     DRT.Datas.Pop;
   end;
+  CS.Release;
+
+  CS.Destroy;
 end;
 
 procedure TIRCClient.ParseData(Data: String);
 var
-  IRCData: TStringList;
+  IRCData, PrivMsgData: TStringList;
   StrBuf: String;
-  MessageBuf: String;
+  Message: TMessage;
+  CS: TCriticalSection;
+
 begin
   IRCData := TStringList.Create;
+  CS := TCriticalSection.Create;
+
   Split(' ', Data, IRCData);
 
   if (Length(Data) > 4) then begin
@@ -123,13 +146,18 @@ end;
   	'001': Send('MODE ' + Nick + '+B');
     'PRIVMSG': begin
       if LowerCase(IRCData[2]) <> LowerCase(Nick) then begin
-				MessageBuf := RestAfter(IRCData, 3);
-        //StrBuf := Copy(IRCData[3], 2, Length(IRCData[3])-1);
-				MessageQueue.Push(MessageBuf);
+				Message.Content := RestAfter(IRCData, 3);
+        PrivMsgData := TStringList.Create;
+        Split('!', Data, PrivMsgData);
+        Message.Sender := Copy(PrivMsgData[0], 2, Length(PrivMsgData[0])-2);
+        CS.Acquire;
+				MessageQueue.Push(Message);
+        CS.Release;
       end;
     end;
   end;
 
+  CS.Destroy;
   IRCData.Destroy;
 end;
 
@@ -166,13 +194,20 @@ begin
   Send('PART ' + Channel);
 end;
 
-function TIRCClient.GetMessage: String;
+function TIRCClient.GetMessage: TMessage;
 var
-  Message: String;
+  Message: TMessage;
+  CS: TCriticalSection;
 begin
+  CS := TCriticalSection.Create;
+
+  CS.Acquire;
   Message := MessageQueue.Front;
   MessageQueue.Pop;
   GetMessage := Message;
+  CS.Release;
+
+  CS.Destroy;
 end;
 
 procedure TIRCClient.SendMessage(Message: String; Channel: String);
@@ -232,12 +267,18 @@ end;
 procedure TDataReadThread.Execute;
 var
   Buffer: String;
+  CS: TCriticalSection;
 begin
+  CS := TCriticalSection.Create;
+
   while (true) do begin
 		ReadLN(Sin, Buffer);
+    CS.Acquire;
     Datas.Push(Buffer);
+    CS.Release;
   end;
 end;
 
 begin
 end.
+
