@@ -4,17 +4,23 @@ unit IRC;
 
 interface
 
-uses Sockets, Winsock2, SysUtils, Classes, Contnrs;
+uses Sockets, Winsock2, SysUtils, Classes, gqueue;
 
 type
   TAddress = array[0..3] of byte;
+  TStringQueue = Specialize TQueue<String>;
+
+  TMessage = record
+    Sender: String;
+    Content: String;
+  end;
 
 	TDataReadThread = class(TThread)
 		protected
       procedure Execute; override;
 
     public
-      Datas: TQueue;
+      Datas: TStringQueue;
       constructor Create(CreateSuspended: Boolean; Sock: LongInt; var aSin, aSout: Text);
 
     private
@@ -33,7 +39,7 @@ type
       inputLine: String;
       Sin, Sout: Text;
 			DRT: TDataReadThread;
-      MessageQueue: TQueue;
+      MessageQueue: TStringQueue;
 
       constructor Create(Server: TAddress; Port: Integer);
       constructor Create(Server: TAddress);
@@ -64,7 +70,7 @@ begin
   _Server := Server;
   _Port := Port;
 
-  MessageQueue := TQueue.Create;
+  MessageQueue := TStringQueue.Create;
 end;
 
 constructor TIRCClient.Create(Server: TAddress);
@@ -90,8 +96,10 @@ procedure TIRCClient.Listen;
 var
   I: Integer;
 begin
-	for I := 0 to DRT.Datas.Count-1 do
-  	ParseData(PChar(DRT.Datas.Pop));
+	while (not DRT.Datas.IsEmpty) do begin
+    ParseData(DRT.Datas.Front);
+    DRT.Datas.Pop;
+  end;
 end;
 
 procedure TIRCClient.ParseData(Data: String);
@@ -117,7 +125,7 @@ end;
       if LowerCase(IRCData[2]) <> LowerCase(Nick) then begin
 				MessageBuf := RestAfter(IRCData, 3);
         //StrBuf := Copy(IRCData[3], 2, Length(IRCData[3])-1);
-				MessageQueue.Push(PChar(MessageBuf));
+				MessageQueue.Push(MessageBuf);
       end;
     end;
   end;
@@ -159,8 +167,12 @@ begin
 end;
 
 function TIRCClient.GetMessage: String;
+var
+  Message: String;
 begin
-  GetMessage := String(PChar(MessageQueue.Pop));
+  Message := MessageQueue.Front;
+  MessageQueue.Pop;
+  GetMessage := Message;
 end;
 
 procedure TIRCClient.SendMessage(Message: String; Channel: String);
@@ -207,7 +219,7 @@ end;
 {DATA READ THREAD}
 constructor TDataReadThread.Create(CreateSuspended: Boolean; Sock: LongInt; var aSin, aSout: Text);
 begin
-  Datas := TQueue.Create;
+  Datas := TStringQueue.Create;
 
   FreeOnTerminate := True;
   Socket := Sock;
@@ -223,7 +235,7 @@ var
 begin
   while (true) do begin
 		ReadLN(Sin, Buffer);
-    Datas.Push(PChar(Buffer));
+    Datas.Push(Buffer);
   end;
 end;
 
