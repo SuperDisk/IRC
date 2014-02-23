@@ -23,8 +23,10 @@ begin
 
   while true do begin
 		Client.Listen;
-		Msg := Client.GetMessage;
-    if Msg <> '' then WriteLN(Msg);
+		while Client.HasMessages do begin
+		  Msg := Client.GetMessage;
+          if Msg <> '' then WriteLN(Msg);
+		end;
   end;
 
   readln;
